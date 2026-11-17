@@ -579,6 +579,36 @@ onmessage = async (e) => {
 #trenazher .tr-side a.sec { display:block; padding:5px 8px 5px 20px; border-radius:8px; font-weight:600; color:var(--ink); text-decoration:none; }
 #trenazher .ref-task { scroll-margin-top:12px; }
 @media (max-width:900px) { #trenazher .tr-layout { grid-template-columns:minmax(0,1fr); } #trenazher .tr-side { position:static; max-height:none; } }
+/* 🐞 по шагам */
+#trenazher .dbg { container-type:inline-size; border:1.5px solid var(--line); border-radius:12px; padding:10px; display:grid; gap:8px; background:var(--card); margin-top:6px; }
+#trenazher .dbg.stale { opacity:.55; }
+#trenazher .dbg-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+#trenazher .dbg-bar .btn { padding:6px 11px; font-size:14px; }
+#trenazher .dbg-bar input[type=range] { flex:1; min-width:120px; accent-color:var(--acc); }
+#trenazher .dbg-pos { font:13px/1.45 var(--m); color:var(--ink2); }
+#trenazher .dbg-pos b { color:var(--ink); }
+#trenazher .dbg-pos .ret { color:var(--ok); font-weight:700; }
+#trenazher .dbg-grid { display:grid; grid-template-columns:minmax(0,6fr) minmax(0,5fr); gap:10px; align-items:start; }
+@container (max-width:640px) { #trenazher .dbg-grid { grid-template-columns:minmax(0,1fr); } }
+#trenazher .dbg-code { position:relative; margin:0; background:var(--code); color:var(--codeink); font:13.5px/1.5 var(--m); border-radius:10px; padding:8px 0; max-height:340px; overflow:auto; tab-size:4; }
+#trenazher .dbg-code .ln { display:block; white-space:pre; padding:0 12px 0 0; border-left:4px solid transparent; }
+#trenazher .dbg-code .ln i { display:inline-block; width:3.2em; padding-right:.9em; text-align:right; font-style:normal; color:#7C8496; user-select:none; }
+#trenazher .dbg-code .ln.x { color:#8B93A6; font-style:italic; }
+#trenazher .dbg-code .ln.cur { background:rgba(242,182,50,.26); border-left-color:#F2B632; }
+#trenazher .dbg-code .ln.errl { background:rgba(220,70,55,.38); border-left-color:#FF6B5A; }
+#trenazher .dbg-h { font:600 11px var(--m); letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:2px 0 4px; }
+#trenazher .dbg-vars { width:100%; min-width:0; margin:0; border-collapse:collapse; font:13px/1.4 var(--m); }
+#trenazher .dbg-vars td { padding:3px 6px; border:0; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-word; }
+#trenazher .dbg-vars td:first-child { font-weight:700; white-space:nowrap; }
+#trenazher .dbg-vars td.ty { color:var(--muted); white-space:nowrap; }
+#trenazher .dbg-vars tr.chg td { background:var(--warnsoft); }
+#trenazher .dbg-vars tr.gl td { color:var(--muted); }
+#trenazher .dbg-vars tr.sep td { font:600 11px var(--m); color:var(--muted); letter-spacing:.06em; text-transform:uppercase; border-bottom:0; padding-top:8px; }
+#trenazher .dbg-vars tr.none td { color:var(--muted); font-weight:400; }
+#trenazher .dbg-out { margin:0; padding:6px 10px; border-radius:8px; background:var(--paper); border:1px solid var(--line); font:13.5px/1.45 var(--m); white-space:pre-wrap; word-break:break-word; max-height:160px; overflow:auto; min-height:2.2em; }
+#trenazher .dbg-end:empty, #trenazher .dbg-host:empty { display:none; }
+#trenazher .dbg .legend { font:12px var(--m); color:var(--muted); }
+#trenazher .ref-head kbd { font:600 12px var(--m); background:rgba(255,255,255,.14); border-radius:5px; padding:1px 5px; }
 </style>
 
 <div class="wrap" style="padding-top:0">
@@ -587,6 +617,7 @@ onmessage = async (e) => {
       <div class="eyebrow">Тренажёр · теория и задачи с автопроверкой</div>
       <h2 id="tr-title">Строки, списки, множества, словари</h2>
       <p>Сначала теория с живыми примерами — их можно менять и запускать. Потом задачи от простых к сложным; задачи второго уровня идут сериями по 3–4 похожие, чтобы приём запомнился. Решение проверяется здесь же на тестах, прогресс сохраняется в этом браузере.</p>
+      <p>Непонятно, что делает программа? Жми <b>🐞 По шагам</b> — и в примерах, и в задачах. Видно, какая строка сейчас выполнится, как меняются переменные и что уже напечатано. Шагать можно кнопками или стрелками <kbd>←</kbd> <kbd>→</kbd>.</p>
       <div class="ref-py" id="tr-py">Python загрузится при первом запуске — секунд 10–20.</div>
     </div>
     <div class="tr-layout">
@@ -646,12 +677,107 @@ def __run(code, inp, files_json="{}"):
             if _o.path.exists(_n):
                 _o.remove(_n)
     return [out.getvalue(), err]
+
+import types as _ty
+class _Stop(BaseException):
+    pass
+def __trace(code, inp, files_json="{}", cap=1500):
+    import json as _j, os as _o
+    files = _j.loads(files_json)
+    for _n in list(files):
+        with open(_n, "w", encoding="utf-8") as _h:
+            _h.write(files[_n])
+    out = io.StringIO()
+    steps = []
+    state = {"cut": False}
+    g = {"__name__": "__main__"}
+    def short(v):
+        try:
+            s = repr(v)
+        except Exception:
+            s = "?"
+        return s if len(s) <= 300 else s[:300] + "…"
+    def snap(d):
+        r = []
+        for k, v in list(d.items()):
+            if k.startswith("__") or isinstance(v, (_ty.ModuleType, _ty.FunctionType, _ty.BuiltinFunctionType, type)):
+                continue
+            r.append([k, short(v), type(v).__name__])
+            if len(r) >= 40:
+                break
+        return r
+    def own(f):
+        n = f.f_code.co_name
+        return f.f_code.co_filename == "<код>" and (n == "<module>" or not n.startswith("<"))
+    def depth(f):
+        n = 0
+        while f is not None:
+            if own(f) and f.f_code.co_name != "<module>":
+                n += 1
+            f = f.f_back
+        return n
+    def rec(f, ret, val=None):
+        if len(steps) >= cap:
+            state["cut"] = True
+            raise _Stop()
+        fn = f.f_code.co_name
+        st = {"l": f.f_lineno, "o": len(out.getvalue())}
+        if fn == "<module>":
+            st["v"] = snap(f.f_globals)
+        else:
+            st["f"] = fn
+            st["d"] = depth(f)
+            st["v"] = snap(f.f_locals)
+            st["g"] = snap(f.f_globals)
+            if ret:
+                st["r"] = short(val)
+        steps.append(st)
+    def local(f, ev, arg):
+        if ev == "line":
+            rec(f, False)
+        elif ev == "return" and f.f_code.co_name != "<module>":
+            rec(f, True, arg)
+        return local
+    def glob(f, ev, arg):
+        if ev == "call" and own(f):
+            return local
+        return None
+    old = sys.stdin, sys.stdout
+    sys.stdin, sys.stdout = io.StringIO(inp), out
+    err, eline = "", 0
+    try:
+        c = compile(code, "<код>", "exec")
+        sys.settrace(glob)
+        exec(c, g)
+    except SystemExit:
+        pass
+    except _Stop:
+        pass
+    except BaseException as e:
+        line = getattr(e, "lineno", None) if isinstance(e, SyntaxError) else None
+        for f in traceback.extract_tb(e.__traceback__):
+            if f.filename == "<код>":
+                line = f.lineno
+        eline = line or 0
+        err = type(e).__name__ + ": " + str(e) + (" (строка " + str(line) + ")" if line else "")
+    finally:
+        sys.settrace(None)
+        sys.stdin, sys.stdout = old
+        for _n in files:
+            if _o.path.exists(_n):
+                _o.remove(_n)
+    return _j.dumps({"steps": steps, "out": out.getvalue(), "err": err, "eline": eline, "cut": state["cut"], "fin": snap(g)}, ensure_ascii=False)
 \`);
   postMessage({ ready: true });
 })().catch((e) => postMessage({ fatal: String(e) }));
 onmessage = async (e) => {
   await ready;
-  const { id, code, input, files } = e.data, t0 = performance.now();
+  const { id, code, input, files, trace } = e.data, t0 = performance.now();
+  if (trace) {
+    try { postMessage({ id, out: "", err: "", tr: py.globals.get("__trace")(code, input || "", files || "{}", 1500), ms: performance.now() - t0 }); }
+    catch (x) { postMessage({ id, out: "", err: String(x), ms: performance.now() - t0 }); }
+    return;
+  }
   try {
     const r = py.globals.get("__run")(code, input || "", files || "{}");
     const [out, err] = r.toJs(); r.destroy();
@@ -677,13 +803,13 @@ onmessage = async (e) => {
     return ready;
   }
   function stop() { if (worker) worker.terminate(); worker = null; ready = null; for (const w of waiting.values()) w({ out: "", err: "stopped" }); waiting.clear(); }
-  async function run(code, input, limit, files) {
+  async function run(code, input, limit, files, trace) {
     try { await start(); } catch (e) { return { out: "", err: "Python не загрузился. Проверь интернет и обнови страницу.", st: "RE" }; }
     const id = ++seq;
     return new Promise((ok) => {
       const timer = setTimeout(() => { waiting.delete(id); stop(); status("Программа работала слишком долго — остановил. Python перезапустится при следующем запуске."); ok({ out: "", err: "", st: "TL" }); }, limit);
-      waiting.set(id, (m) => { clearTimeout(timer); ok({ out: m.out, err: m.err, ms: m.ms, st: m.err ? "RE" : "OK" }); });
-      worker.postMessage({ id, code, input, files: JSON.stringify(files || {}) });
+      waiting.set(id, (m) => { clearTimeout(timer); let tr = null; try { tr = m.tr ? JSON.parse(m.tr) : null; } catch (e) {} ok({ out: m.out, err: m.err, ms: m.ms, st: m.err ? "RE" : "OK", tr }); });
+      worker.postMessage({ id, code, input, files: JSON.stringify(files || {}), trace: !!trace });
     });
   }
   // короткое объяснение ошибки по-русски
@@ -700,6 +826,69 @@ onmessage = async (e) => {
   ];
   const why = (err) => (WHY.find(([re]) => re.test(err)) || [, ""])[1];
 
+  // ── 🐞 по шагам: какая строка сейчас выполнится, какие переменные, что уже напечатано ──
+  // code — вся программа; from — с какой строки идёт то, что дописала проверка (0 — ничего)
+  async function debug(host, code, input, files, from) {
+    host.innerHTML = `<div class="verdict run">${worker ? "Записываю шаги программы…" : "Загружаю Python… в первый раз это 10–20 секунд."}</div>`;
+    const r = await run(code, input, 10000, files, true);
+    if (r.st === "TL") { host.innerHTML = '<div class="verdict bad"><b>Слишком долго</b><p>Программа не закончилась за 10 секунд — по шагам её не посмотреть. Нет ли бесконечного цикла?</p></div>'; return; }
+    const tr = r.tr;
+    if (!tr) { host.innerHTML = `<div class="verdict bad"><b>Не получилось записать шаги</b><div class="err">${esc(r.err)}</div></div>`; return; }
+    if (!tr.steps.length) { host.innerHTML = `<div class="verdict bad"><b>${tr.err ? "Ошибка ещё до первого шага" : "Программа не сделала ни одного шага"}</b>${tr.err ? `<div class="err">${esc(tr.err)}\n${esc(why(tr.err))}</div>` : "<p>В ней нет ни одной строки, которая выполняется.</p>"}</div>`; return; }
+    // последний «шаг» — программа уже закончилась: итоговые переменные и весь вывод
+    const steps = tr.steps.concat([{ end: 1, l: tr.eline || 0, v: tr.fin, o: tr.out.length }]);
+    const N = steps.length, src = code.split("\n");
+    host.innerHTML = `<div class="dbg" tabindex="-1">
+      <div class="dbg-bar"><button class="btn ghost" type="button" data-p title="Шаг назад (←)">◀</button><button class="btn" type="button" data-n title="Шаг вперёд (→)">Шаг ▶</button><button class="btn ghost" type="button" data-e title="Сразу к концу программы">⏭ В конец</button><input type="range" min="0" max="${N - 1}" value="0" aria-label="Номер шага"><button class="btn ghost" type="button" data-x title="Закрыть">✕</button></div>
+      <div class="dbg-pos" aria-live="polite"></div>
+      <div class="dbg-grid"><pre class="dbg-code">${src.map((s, k) => `<span class="ln${from && k + 1 >= from ? " x" : ""}" data-l="${k + 1}"><i>${k + 1}</i>${esc(s) || " "}</span>`).join("")}</pre>
+        <div><div class="dbg-h">Переменные</div><table class="dbg-vars"></table><div class="dbg-h" style="margin-top:10px">Вывод</div><pre class="dbg-out"></pre></div></div>
+      <div class="legend">Жёлтая строка — та, что выполнится следующей.${from ? " Серые строки дописывает проверка — это вызов твоей функции." : ""}${tr.cut ? " Записаны только первые 1500 шагов." : ""}</div>
+      <div class="dbg-end"></div></div>`;
+    const d = host.querySelector(".dbg"), pre = d.querySelector(".dbg-code"), range = d.querySelector("input[type=range]");
+    const rowsOf = (vs, prevMap, cls) => vs.map(([n, v, ty]) => `<tr class="${cls}${prevMap && prevMap.has(n) && prevMap.get(n) !== v ? " chg" : prevMap && !prevMap.has(n) ? " chg" : ""}"><td>${esc(n)}</td><td>${esc(v)}</td><td class="ty">${esc(ty)}</td></tr>`).join("");
+    let k = 0;
+    function show() {
+      const st = steps[k], pv = k > 0 ? steps[k - 1] : null;
+      const same = pv && !pv.end && (pv.f || "") === (st.f || "") && (pv.d || 0) === (st.d || 0);
+      const prevMap = same ? new Map(pv.v.map(([n, v]) => [n, v])) : null;
+      pre.querySelectorAll(".cur, .errl").forEach((x) => x.classList.remove("cur", "errl"));
+      const ln = st.l ? pre.querySelector(`[data-l="${st.l}"]`) : null;
+      if (ln) {
+        ln.classList.add(st.end ? "errl" : "cur");
+        if (ln.offsetTop < pre.scrollTop + 8 || ln.offsetTop + ln.offsetHeight > pre.scrollTop + pre.clientHeight - 8) pre.scrollTop = ln.offsetTop - pre.clientHeight / 2;
+      }
+      let pos;
+      if (st.end) pos = tr.err ? `<b>Ошибка</b> — программа остановилась${st.l ? ` на строке ${st.l}` : ""}` : tr.cut ? "<b>Остановлено</b> после 1500 шагов" : "<b>Программа закончилась</b> — так выглядят переменные в конце";
+      else {
+        pos = `<b>Шаг ${k + 1} из ${N - 1}</b> · строка ${st.l} · ` + (st.f ? `внутри <b>${esc(st.f)}()</b>${st.d > 1 ? ` · глубина вызова ${st.d}` : ""}` : "основная программа");
+        if (st.r != null) pos += ` · <span class="ret">↩ ${esc(st.f)}() возвращает ${esc(st.r)}</span>`;
+      }
+      d.querySelector(".dbg-pos").innerHTML = pos;
+      let rows = st.v.length ? rowsOf(st.v, prevMap, "") : `<tr class="none"><td colspan="3">${st.f ? "у функции нет своих переменных" : "переменных пока нет"}</td></tr>`;
+      if (st.g && st.g.length) rows += `<tr class="sep"><td colspan="3">переменные основной программы</td></tr>` + rowsOf(st.g, null, "gl");
+      d.querySelector(".dbg-vars").innerHTML = rows;
+      const o = d.querySelector(".dbg-out"); o.textContent = tr.out.slice(0, st.o) || " "; o.scrollTop = o.scrollHeight;
+      const end = d.querySelector(".dbg-end");
+      end.innerHTML = st.end ? (tr.err ? `<div class="verdict bad"><div class="err">${esc(tr.err)}\n${esc(why(tr.err))}</div></div>` : tr.cut ? '<div class="verdict bad"><b>Слишком много шагов</b><p>Показаны первые 1500. Если программа должна была закончиться раньше — ищи бесконечный цикл.</p></div>' : "") : "";
+      range.value = k;
+      d.querySelector("[data-p]").disabled = k === 0;
+      d.querySelector("[data-n]").disabled = d.querySelector("[data-e]").disabled = k === N - 1;
+    }
+    const go = (nk) => { nk = Math.max(0, Math.min(N - 1, nk)); if (nk !== k) { k = nk; show(); } const a = document.activeElement; if (!d.contains(a) || a.disabled) d.focus({ preventScroll: true }); };
+    d.querySelector("[data-p]").onclick = () => go(k - 1);
+    d.querySelector("[data-n]").onclick = () => go(k + 1);
+    d.querySelector("[data-e]").onclick = () => go(N - 1);
+    d.querySelector("[data-x]").onclick = () => { host.innerHTML = ""; };
+    range.addEventListener("input", () => go(+range.value));
+    d.addEventListener("keydown", (e) => {
+      if (e.target === range) return;
+      if (e.key === "ArrowRight") { e.preventDefault(); go(k + 1); } else if (e.key === "ArrowLeft") { e.preventDefault(); go(k - 1); }
+    });
+    show();
+    d.querySelector("[data-n]").focus({ preventScroll: true });
+  }
+
   // ── разметка ──
   const lines = (s) => Math.min(14, Math.max(1, String(s).split("\n").length));
   function cellHtml(c, big) {
@@ -708,8 +897,8 @@ onmessage = async (e) => {
     return `<div class="cell" data-cell="${c.id}">
       <textarea aria-label="Пример — можно менять" spellcheck="false" autocapitalize="off" rows="${lines(code) + (big ? 1 : 0)}">${esc(code)}</textarea>
       ${c.stdin != null ? `<textarea class="stdin" aria-label="Ввод для программы" rows="1" spellcheck="false">${esc(c.stdin)}</textarea>` : ""}
-      ${c.norun ? `<p class="norun">${esc(c.norun)}</p>` : `<div class="cell-bar"><button class="btn go" type="button" data-run>▶ Запустить</button><button class="btn ghost" type="button" data-reset title="Вернуть исходный пример">↺ Как было</button>${edited ? '<span class="edited">изменено тобой</span>' : ""}</div>
-      <pre class="out${/Error: /.test(c.out) ? " err" : ""}${edited ? " stale" : ""}" aria-live="polite">${esc(c.out || " ")}</pre>`}
+      ${c.norun ? `<p class="norun">${esc(c.norun)}</p>` : `<div class="cell-bar"><button class="btn go" type="button" data-run>▶ Запустить</button><button class="btn ghost" type="button" data-dbg title="Выполнить по шагам: какая строка сейчас выполняется и как меняются переменные">🐞 По шагам</button><button class="btn ghost" type="button" data-reset title="Вернуть исходный пример">↺ Как было</button>${edited ? '<span class="edited">изменено тобой</span>' : ""}</div>
+      <pre class="out${/Error: /.test(c.out) ? " err" : ""}${edited ? " stale" : ""}" aria-live="polite">${esc(c.out || " ")}</pre><div class="dbg-host"></div>`}
     </div>`;
   }
   function rowsHtml(rows) {
@@ -725,7 +914,7 @@ onmessage = async (e) => {
       <h4>Пример</h4><div class="ex">${samples.map((x) => `<div class="exrow">${inBox(x)}<div class="box"><b>Вывод</b><pre>${esc(x.o.trimEnd())}</pre></div>${x.e ? `<div class="expl"><b>Пояснение.</b> ${esc(x.e)}</div>` : ""}</div>`).join("")}</div>
       ${t.hints.map((h, k) => `<details class="hint"><summary>Подсказка ${k + 1}</summary><p>${esc(h)}</p></details>`).join("")}
       <textarea class="ed" spellcheck="false" autocapitalize="off" aria-label="Решение задачи «${esc(t.title)}»">${esc(code)}</textarea>
-      <div class="row"><button class="btn ghost" type="button" data-sample>▶ На примере</button><button class="btn go" type="button" data-check>✓ Проверить</button><span class="keys">Tab — отступ · Ctrl+Enter — проверить</span></div>
+      <div class="row"><button class="btn ghost" type="button" data-sample>▶ На примере</button><button class="btn ghost" type="button" data-dbg title="Выполнить на примере по шагам: какая строка сейчас выполняется и как меняются переменные">🐞 По шагам</button><button class="btn go" type="button" data-check>✓ Проверить</button><span class="keys">Tab — отступ · Ctrl+Enter — проверить</span></div>
       <div data-res aria-live="polite"></div>
     </div>`;
   }
@@ -803,7 +992,14 @@ onmessage = async (e) => {
       else el.querySelectorAll(".why").forEach((x) => x.remove());
     };
     el.querySelector("[data-run]").onclick = go;
+    const host = el.querySelector(".dbg-host");
+    el.querySelector("[data-dbg]").onclick = async () => {
+      const bs = el.querySelectorAll(".cell-bar .btn"); bs.forEach((b) => (b.disabled = true));
+      await debug(host, ta.value, inp ? inp.value + "\n" : "", null, 0);
+      bs.forEach((b) => (b.disabled = false));
+    };
     el.querySelector("[data-reset]").onclick = () => {
+      host.innerHTML = "";
       ta.value = c.code; delete S.code[c.id]; save(); grow(ta);
       out.className = "out" + (/Error: /.test(c.out) ? " err" : ""); out.textContent = c.out || " ";
       el.querySelectorAll(".why").forEach((x) => x.remove()); bar.querySelector(".edited")?.remove();
@@ -813,7 +1009,7 @@ onmessage = async (e) => {
       if (ta.value === c.code) delete S.code[c.id]; else S.code[c.id] = ta.value;
       save();
       if (!bar.querySelector(".edited") && ta.value !== c.code) bar.insertAdjacentHTML("beforeend", '<span class="edited">изменено тобой</span>');
-      out.classList.add("stale");
+      out.classList.add("stale"); host.querySelector(".dbg")?.classList.add("stale");
     });
     tabKeys(ta, go);
   });
@@ -823,7 +1019,7 @@ onmessage = async (e) => {
   document.querySelectorAll("#tr-body [data-task]").forEach((el) => {
     const t = TASKS[el.dataset.task], ed = el.querySelector("textarea.ed"), res = el.querySelector("[data-res]");
     const btns = el.querySelectorAll(".row .btn");
-    ed.addEventListener("input", () => { S.code["task:" + t.slug] = ed.value; save(); });
+    ed.addEventListener("input", () => { S.code["task:" + t.slug] = ed.value; save(); res.querySelector(".dbg")?.classList.add("stale"); });
     const lock = (on) => btns.forEach((b) => (b.disabled = on));
     const same = (a, b) => t.loose ? norm(a).split("\n").filter((l) => l.trim()).join("\n") === norm(b).split("\n").filter((l) => l.trim()).join("\n") : norm(a) === norm(b);
     const prog = (code, x) => (x.call ? code + "\n" + x.call : code);
@@ -842,6 +1038,12 @@ onmessage = async (e) => {
       const ok = r.st === "OK" && same(r.out, x.o);
       res.innerHTML = `<div class="verdict ${ok ? "ok" : "bad"}"><b>${ok ? "Пример совпал ✓ — теперь «Проверить»" : r.st === "OK" ? "На примере ответ не совпал" : r.st === "TL" ? "Слишком долго" : "Ошибка при выполнении"}</b>
         <div class="exrow" style="margin-top:8px"><div class="box"><b>Твой вывод</b><pre>${esc(r.out || "(пусто)")}</pre></div><div class="box"><b>Правильный вывод</b><pre>${esc(x.o)}</pre></div></div>${r.err ? `<div class="err">${esc(r.err)}\n${esc(why(r.err))}</div>` : ""}</div>`;
+    };
+    el.querySelector("[data-dbg]").onclick = async () => {
+      const code = ready(); if (!code) return;
+      const x = t.tests.find((y) => y.s); lock(true);
+      await debug(res, prog(code, x), x.i, x.files, x.call ? code.split("\n").length + 1 : 0);
+      lock(false);
     };
     const check = async () => {
       const code = ready(); if (!code) return;
